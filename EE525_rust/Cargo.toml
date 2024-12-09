@@ -1,0 +1,15 @@
+[package]
+name = "EE525_rust"
+version = "0.1.0"
+edition = "2021"
+
+
+
+[dependencies]
+rppal = "0.19.0"
+chrono = "0.4"
+csv = "1.1"
+clap = { version = "4.5.21", features = ["derive"] }
+
+#[[bin]]
+#name = 'mainADXL345.rs'
