@@ -1,0 +1,5 @@
+Here's all the code!
+
+EE525_rust/ - Firmware and data collection stuff. Includes custom firmware for sensor interfacing, control interfacing for Klipper-based 3d printers, and custom gcode with movement parameters.
+
+matlab/ - matlab scripts for processing the data. All matlab figures used in report came from here.
