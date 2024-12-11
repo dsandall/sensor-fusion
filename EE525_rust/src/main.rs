@@ -1,7 +1,6 @@
 use rppal::spi::{Bus, Mode, SlaveSelect, Spi};
 use std::{fs::File, sync::{Arc, Mutex, mpsc}};
-use std::process::Command;
-use std::thread;
+use std::{process::Command, io::Read, thread};
 use std::time::{Duration, Instant};
 use chrono::Local;
 use csv::Writer;
@@ -13,51 +12,60 @@ use crate::sensors::{mpu6050, main_adxl345};
 use mpu6050::Mpu;
 
 // Test Setup Parameters
-const END_TIME: f64 = 5.0;
-const INITIAL_WAIT: f64 = 0.5;
+const END_TIME: f64 = 15.0;
+const INITIAL_WAIT: f64 = 0.0;
 const DISPLAY_TIMES: bool = false;
-const CONTROL_PRINTER: bool = false;
-const SAMPLE_PERIOD: f64 = 1.0/3000.0;
+const CONTROL_PRINTER: bool = true;
+const SAVE_CSV: bool = true;
+const SAMPLE_PERIOD: f64 = 1.0/1000.0;
 
 //ADXL
-const SPI_SPEED_HZ: u32 = 4_000_000; // Adjust to 562 kHz
+const SPI_SPEED_HZ: u32 = 2_000_000; // Adjust to 562 kHz
 
 
 fn main() -> Result<(), io::Error> {
-
-    // // Collect command-line arguments
-    // let args: Vec<String> = env::args().collect();
-
-    // // Check if we have at least one argument (the program name is always the first)
-    // if args.len() < 2 {
-    //     println!("Usage: {} <argument>", args[0]);
-    //     return Err(io::Error::new(io::ErrorKind::InvalidInput, "Not enough arguments"));
-    // }
-
-    // // Access the argument (args[1] is the first user-provided argument)
-    // let input = &args[1];
-    // println!("Argument provided: {}", input);
-
-    // if args.len() > 2{ //theres another argument hiding in there
-    //     // do nothing
-    // }
-
-    //////////////////////////////////////
-
     // Initialize SPI for ADXL345
 
     // Initialize sensors
     let (spi, mpu) = initialize_sensors()?;
 
     // Home the printer
-    println!("Homing printer");
-    // if CONTROL_PRINTER {
-    //     Command::new("sh").arg("-c")
-    //         .arg("echo G28 > ~/printer_data/comms/klippy.serial")
-    //         .spawn()
-    //         .expect("Failed to send G-code command").wait()?;
-    //     thread::sleep(Duration::from_secs(25));
-    // }
+    if CONTROL_PRINTER {
+        println!("Homing printer");
+        Command::new("sh").arg("-c")
+            .arg("echo G28 > ~/printer_data/comms/klippy.serial")
+            .spawn()
+            .expect("Failed to send G-code command").wait()?;
+        thread::sleep(Duration::from_secs(25));
+    }
+
+    
+    // Assuming the printer communicates with Mainsail via a serial file like `klippy.serial`
+    if CONTROL_PRINTER {
+    
+        // Send the G-code commands to the printer
+        println!("Sending G-code to printer...");
+    
+        // Read the G-code file content
+        let mut file = File::open("/home/admin/printer_data/gcodes/oscillator2.gcode")?;
+        let mut gcode_content = String::new();
+        file.read_to_string(&mut gcode_content)?;
+
+        let mut command = Command::new("sh")
+            .arg("-c")
+            .arg(format!("echo \"{}\" > ~/printer_data/comms/klippy.serial", gcode_content))
+            .spawn()
+            .expect("Failed to send G-code command")
+            .wait()?;
+    }
+
+    ///////
+    ///////
+    ///////
+
+    ///////
+    ///////
+    ///////
 
     // Generate a unique filename with the current date and time
     let start_time = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
@@ -72,8 +80,21 @@ fn main() -> Result<(), io::Error> {
     println!("Data capture complete.");
 
     // Write data to CSV after collection
-    write_data_to_csv(&filename, &data_records)?;
+    if SAVE_CSV {
+        write_data_to_csv(&filename, &data_records)?;
+    }
 
+    // count ADXL spikes
+    let mut count = 0;
+    for inner_vec in &data_records {
+        if let Some(&value) = inner_vec.get(6) { // Safe access to the 6th index
+            if value.abs() > 5.0 {
+                count += 1;
+            }
+        }
+    }
+
+    println!("{}", count);
     Ok(())
 }
 
@@ -104,7 +125,6 @@ fn initialize_sensors() -> Result<(Spi, Mpu), io::Error> {
     mpu.verify_stuff();
     println!("MPU6050 Initialized");
 
-
     Ok((spi, mpu))
 }
 
@@ -124,13 +144,13 @@ fn collect_data(
 
     let (tx, rx) = mpsc::channel::<f32>();
 
-    // Spawn a thread to get acceleration data from MPU6050
-    let mpu_thread = thread::spawn(move || {
-        loop {
-            let dat = mpu.get_accel_z().unwrap_or(-70.);
-            tx.send(dat).unwrap();  // Send data back to main thread
-        }
-    });
+    // // Spawn a thread to get acceleration data from MPU6050
+    // let mpu_thread = thread::spawn(move || {
+    //     loop {
+    //         let dat = mpu.get_accel_z().unwrap_or(-70.);
+    //         tx.send(dat).unwrap();  // Send data back to main thread
+    //     }
+    // });
 
     // Calculate the interval between samples in seconds
     let mut next_sample_time = start_timestamp + Duration::from_secs_f64(sample_interval);
@@ -167,8 +187,9 @@ fn collect_data(
             sent_cmd = true;
         }
 
-        let mpu_data = rx.recv().unwrap(); // block until MPU thread has data ready
-
+        // let mpu_data = rx.recv().unwrap(); // block until MPU thread has data ready
+        let mpu_data = mpu.get_accel_z().unwrap();
+        
         let rec: u128 = Instant::now().duration_since(current_time).as_micros();
         if DISPLAY_TIMES { println!("mpu finished in {}", rec); }
 
@@ -176,7 +197,7 @@ fn collect_data(
         data_records.push(vec![elapsed_time, 0.0, 0.0, mpu_data.into(), 0.0, 0.0, adxl_data.into()]);
     }
 
-    drop(mpu_thread); // Complete the MPU thread
+    // drop(mpu_thread); // Complete the MPU thread
 
     data_records // Return the data for CSV formatting
 }
